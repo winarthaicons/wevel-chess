@@ -32,6 +32,9 @@ namespace Eval {
 
 constexpr Value Tempo = Value(28); // Must be visible to search
 
+// Set to true when a valid NNUE network is loaded.
+extern bool useNNUE;
+
 std::string trace(const Position& pos);
 
 Value evaluate(const Position& pos);

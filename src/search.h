@@ -50,6 +50,7 @@ struct Stack {
   Value staticEval;
   int statScore;
   int moveCount;
+  int doubleExtensions;  // SF13: cap runaway double-extensions per path
 };
 
 

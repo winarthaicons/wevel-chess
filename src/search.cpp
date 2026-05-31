@@ -195,7 +195,7 @@ namespace {
 void Search::init() {
 
   for (int i = 1; i < MAX_MOVES; ++i)
-      Reductions[i] = int((24.8 + std::log(Threads.size()) / 2) * std::log(i));
+      Reductions[i] = int((22.0 + std::log(Threads.size())) * std::log(i));
 }
 
 
@@ -820,6 +820,16 @@ namespace {
         tte->save(posKey, VALUE_NONE, ttPv, BOUND_NONE, DEPTH_NONE, MOVE_NONE, eval);
     }
 
+    // SF14: Apply pawn correction history — adjusts eval toward historically
+    // more accurate values for positions with similar pawn structures.
+    if (!inCheck)
+    {
+        int correction = (thisThread->pawnCorrectionHistory[us][pos.pawn_key() & 0x3FFF]
+                        + thisThread->pawnCorrectionHistory[~us][pos.pawn_key() & 0x3FFF]) / 2;
+        eval = clamp(eval + correction / 512,
+                     VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1);
+    }
+
     // Step 7. Razoring (~1 Elo)
     if (   !rootNode // The required rootNode PV handling is not available in qsearch
         &&  depth < 2
@@ -849,8 +859,8 @@ namespace {
     {
         assert(eval - beta >= 0);
 
-        // Null move dynamic reduction based on depth and value
-        Depth R = (854 + 68 * depth) / 258 + std::min(int(eval - beta) / 192, 3);
+        // Null move dynamic reduction based on depth and value (SF14 tuning)
+        Depth R = std::min(int(eval - beta) / 173, 6) + depth / 3 + 4;
 
         ss->currentMove = MOVE_NULL;
         ss->continuationHistory = &thisThread->continuationHistory[0][0][NO_PIECE][0];
@@ -1059,6 +1069,13 @@ moves_loop: // When in check, search starts from here
           {
               extension = 1;
               singularLMR = true;
+
+              // SF13: double-extend when TT move is overwhelmingly better and we
+              // are not already deep in the double-extension path
+              if (   !PvNode
+                  &&  value < singularBeta - 75
+                  && (ss-1)->doubleExtensions <= 6)
+                  extension = 2;
           }
 
           // Multi-cut pruning
@@ -1090,8 +1107,9 @@ moves_loop: // When in check, search starts from here
       if (type_of(move) == CASTLING)
           extension = 1;
 
-      // Add extension to new depth
+      // Add extension to new depth; track double-extension count for cap
       newDepth += extension;
+      (ss+1)->doubleExtensions = ss->doubleExtensions + (extension == 2);
 
       // Speculative prefetch as early as possible
       prefetch(TT.first_entry(pos.key_after(move)));
@@ -1338,6 +1356,19 @@ moves_loop: // When in check, search starts from here
                   bestValue >= beta ? BOUND_LOWER :
                   PvNode && bestMove ? BOUND_EXACT : BOUND_UPPER,
                   depth, bestMove, ss->staticEval);
+
+    // SF14: Update pawn correction history.
+    // When the search result deviates from static eval, record the correction
+    // so future evals of similar pawn structures are closer to the search truth.
+    if (   !inCheck
+        && !excludedMove
+        && !(bestMove && pos.capture_or_promotion(bestMove))
+        &&  abs(bestValue - ss->staticEval) < 2 * PawnValueEg)
+    {
+        int bonus = clamp(int(bestValue - ss->staticEval) * depth / 8, -512, 512);
+        thisThread->pawnCorrectionHistory[us][pos.pawn_key() & 0x3FFF] << bonus;
+        thisThread->pawnCorrectionHistory[~us][pos.pawn_key() & 0x3FFF] << bonus;
+    }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
 

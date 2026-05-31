@@ -20,7 +20,10 @@
 */
 
 #include <cassert>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 
@@ -137,6 +140,124 @@ namespace {
   }
 
 
+  // gensfen() generates NNUE training data via self-play.
+  // Usage: gensfen [output_file] [count] [depth]
+  // Output format (nnue-pytorch .plain):
+  //   fen | score_cp | 0000 | result | ply
+  // Result: 1=white win, 0=draw, -1=black win
+  // Score is from White's perspective in centipawns.
+  // Uses a 1-ply greedy search (fastest correct approach that avoids threading).
+
+  // 1-ply: pick the move with the best eval for the side to move
+  static Move pick_best_move(Position& pos, StateInfo& st) {
+      Move best   = MOVE_NONE;
+      Value bestv = -VALUE_INFINITE;
+      for (const auto& m : MoveList<LEGAL>(pos)) {
+          pos.do_move(m, st);
+          Value v = pos.checkers() ? Value(0) : -Eval::evaluate(pos);
+          pos.undo_move(m);
+          if (v > bestv) { bestv = v; best = m; }
+      }
+      return best;
+  }
+
+  void gensfen(Position& pos, istream& args, StateListPtr& states) {
+
+    string output_file = "training_data.plain";
+    int count = 1000000;
+    int /*depth=*/ depth_ignored = 8;  // depth param kept for compatibility
+
+    string token;
+    if (args >> token) output_file = token;
+    if (args >> token) count = stoi(token);
+    if (args >> token) depth_ignored = stoi(token);
+
+    ofstream out(output_file, ios::app);
+    if (!out.is_open()) {
+        cerr << "gensfen: cannot open " << output_file << endl;
+        return;
+    }
+
+    cerr << "gensfen: writing " << count << " positions to " << output_file << endl;
+
+    const char* StartFEN_g = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    std::mt19937 rng(12345);
+
+    int generated = 0;
+
+    while (generated < count) {
+
+        // 1. Set up start position in a local StateInfo deque
+        std::deque<StateInfo> si_deque(1);
+        pos.set(StartFEN_g, false, &si_deque.back(), Threads.main());
+
+        // 2. Play 8-11 random opening moves for variety
+        int opening_moves = 8 + (rng() % 4);
+        for (int i = 0; i < opening_moves; ++i) {
+            MoveList<LEGAL> moves(pos);
+            if (moves.size() == 0) break;
+            Move m = moves.begin()[rng() % moves.size()];
+            si_deque.emplace_back();
+            pos.do_move(m, si_deque.back());
+        }
+
+        // 3. Collect positions during the game
+        struct Rec { string fen; int score_white; int ply; };
+        vector<Rec> records;
+        int resigned_result = 0;  // 0=not resigned yet
+
+        for (int ply = 0; ply < 400 && generated + (int)records.size() < count; ++ply) {
+            if (pos.is_draw(ply)) break;
+
+            MoveList<LEGAL> moves(pos);
+            if (moves.size() == 0) break;  // mate or stalemate
+
+            // Record non-check positions
+            if (!pos.checkers()) {
+                Value v = Eval::evaluate(pos);
+                // Convert to White's perspective
+                int score_w = (int)(pos.side_to_move() == WHITE ? v : -v);
+                if (abs(score_w) < 3500)
+                    records.push_back({ pos.fen(), score_w, ply });
+            }
+
+            // Pick best move via 1-ply search
+            si_deque.emplace_back();
+            StateInfo& st = si_deque.back();
+            Move best = pick_best_move(pos, st);
+            if (best == MOVE_NONE) break;
+
+            // Resign condition: evaluate position after best move
+            pos.do_move(best, st);
+            Value post_eval = Eval::evaluate(pos);
+            int post_white = (int)(pos.side_to_move() == WHITE ? post_eval : -post_eval);
+
+            // If decisively winning for one side, resign (keeps data quality high)
+            if (abs(post_white) >= 2500) {
+                resigned_result = post_white > 0 ? 1 : -1;
+                // Undo the last move before writing records
+                pos.undo_move(best);
+                si_deque.pop_back();
+                break;
+            }
+            // move already applied, continue
+        }
+
+        // Write records with result
+        for (auto& r : records) {
+            out << r.fen << " | " << r.score_white << " | 0000 | " << resigned_result << " | " << r.ply << "\n";
+            ++generated;
+        }
+
+        if (generated % 100000 == 0)
+            cerr << "gensfen: " << generated << "/" << count << " written" << endl;
+    }
+
+    out.flush();
+    cerr << "gensfen: done. " << generated << " positions in " << output_file << endl;
+  }
+
+
   // bench() is called when engine receives the "bench" command. Firstly
   // a list of UCI commands is setup according to bench parameters, then
   // it is run one by one printing a summary at the end.
@@ -241,6 +362,7 @@ void UCI::loop(int argc, char* argv[]) {
       else if (token == "d")        sync_cout << pos << sync_endl;
       else if (token == "eval")     sync_cout << Eval::trace(pos) << sync_endl;
       else if (token == "compiler") sync_cout << compiler_info() << sync_endl;
+      else if (token == "gensfen")  gensfen(pos, is, states);
       else
           sync_cout << "Unknown command: " << cmd << sync_endl;
 

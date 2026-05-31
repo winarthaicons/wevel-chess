@@ -30,6 +30,7 @@
 #include "tt.h"
 #include "uci.h"
 #include "syzygy/tbprobe.h"
+#include "nnue/evaluate_nnue.h"
 
 using std::string;
 
@@ -43,6 +44,8 @@ void on_hash_size(const Option& o) { TT.resize(o); }
 void on_logger(const Option& o) { start_logger(o); }
 void on_threads(const Option& o) { Threads.set(o); }
 void on_tb_path(const Option& o) { Tablebases::init(o); }
+void on_eval_file(const Option& o)  { Eval::NNUE::load_eval(std::string(o)); }
+void on_use_nnue(const Option& o)   { if (!bool(o)) Eval::useNNUE = false; }
 
 
 /// Our case insensitive less() function as required by UCI protocol
@@ -81,6 +84,10 @@ void init(OptionsMap& o) {
   o["SyzygyProbeDepth"]      << Option(1, 1, 100);
   o["Syzygy50MoveRule"]      << Option(true);
   o["SyzygyProbeLimit"]      << Option(7, 0, 7);
+  o["EvalFile"]              << Option("<empty>", on_eval_file);
+  o["Use NNUE"]              << Option(true, on_use_nnue);
+
+  Eval::NNUE::init();
 }
 
 

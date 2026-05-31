@@ -30,6 +30,7 @@
 #include "material.h"
 #include "pawns.h"
 #include "thread.h"
+#include "nnue/evaluate_nnue.h"
 
 namespace Trace {
 
@@ -841,6 +842,8 @@ namespace {
 /// evaluation of the position from the point of view of the side to move.
 
 Value Eval::evaluate(const Position& pos) {
+  if (Eval::useNNUE && !pos.checkers())
+      return NNUE::evaluate(pos) + Eval::Tempo;
   return Evaluation<NO_TRACE>(pos).value();
 }
 

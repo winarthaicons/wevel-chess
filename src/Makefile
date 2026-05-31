@@ -39,7 +39,8 @@ PGOBENCH = ./$(EXE) bench
 ### Object files
 OBJS = benchmark.o bitbase.o bitboard.o endgame.o evaluate.o main.o \
 	material.o misc.o movegen.o movepick.o pawns.o position.o psqt.o \
-	search.o thread.o timeman.o tt.o uci.o ucioption.o syzygy/tbprobe.o
+	search.o thread.o timeman.o tt.o uci.o ucioption.o syzygy/tbprobe.o \
+	nnue/evaluate_nnue.o nnue/features/half_kp.o
 
 ### Establish the operating system name
 KERNEL = $(shell uname -s)
@@ -123,6 +124,7 @@ ifeq ($(ARCH),x86-64-bmi2)
 	popcnt = yes
 	sse = yes
 	pext = yes
+	avx2 = yes
 endif
 
 ifeq ($(ARCH),armv7)
@@ -148,8 +150,8 @@ endif
 
 ### 3.1 Selecting compiler (default = gcc)
 
-CXXFLAGS += -Wall -Wcast-qual -fno-exceptions -std=c++11 $(EXTRACXXFLAGS)
-DEPENDFLAGS += -std=c++11
+CXXFLAGS += -Wall -Wcast-qual -fno-exceptions -std=c++14 $(EXTRACXXFLAGS)
+DEPENDFLAGS += -std=c++14
 LDFLAGS += $(EXTRALDFLAGS)
 
 ifeq ($(COMP),)
@@ -333,6 +335,11 @@ ifeq ($(pext),yes)
 	endif
 endif
 
+### 3.7.1 AVX2 for NNUE (enabled when avx2=yes, i.e. on bmi2 arch)
+ifeq ($(avx2),yes)
+	CXXFLAGS += -DUSE_AVX2 -mavx2
+endif
+
 ### 3.8 Link Time Optimization, it works since gcc 4.5 but not on mingw under Windows.
 ### This is a mix of compile and link time options because the lto link phase
 ### needs access to the optimization flags.
@@ -446,7 +453,7 @@ clean: objclean profileclean
 
 # clean binaries and objects
 objclean:
-	@rm -f $(EXE) *.o ./syzygy/*.o
+	@rm -f $(EXE) *.o ./syzygy/*.o ./nnue/*.o ./nnue/features/*.o
 
 # clean auxiliary profiling files
 profileclean:
@@ -535,6 +542,13 @@ icc-profile-use:
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
 	EXTRACXXFLAGS='-prof_use -prof_dir ./profdir' \
 	all
+
+### NNUE subdirectory rules
+nnue/evaluate_nnue.o: nnue/evaluate_nnue.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+nnue/features/half_kp.o: nnue/features/half_kp.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 .depend:
 	-@$(CXX) $(DEPENDFLAGS) -MM $(OBJS:.o=.cpp) > $@ 2> /dev/null

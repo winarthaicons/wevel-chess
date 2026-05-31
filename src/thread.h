@@ -74,6 +74,9 @@ public:
   ButterflyHistory mainHistory;
   CapturePieceToHistory captureHistory;
   ContinuationHistory continuationHistory[2][2];
+  // SF14: pawn correction history indexed by [color][pawnKey & 0x3FFF]
+  typedef Stats<int16_t, 1024, COLOR_NB, 16384> PawnCorrectionHistory;
+  PawnCorrectionHistory pawnCorrectionHistory;
   Score contempt;
 };
 
